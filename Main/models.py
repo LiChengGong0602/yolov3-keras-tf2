@@ -111,6 +111,7 @@ class BaseModel:
         self.iou_threshold = iou_threshold
         self.score_threshold = score_threshold
         self.model_configuration = model_configuration
+        self.model_layers = []
 
     def apply_func(self, func, x=None, *args, **kwargs):
         """
@@ -136,7 +137,7 @@ class BaseModel:
         return result
 
     def convolution_block(
-        self, x, filters, kernel_size, strides, batch_norm, action=None, activation='leaky'
+        self, x, filters, kernel_size, strides, batch_norm, activation='leaky'
     ):
         """
         Convolution block for yolo version3.
@@ -146,14 +147,11 @@ class BaseModel:
             kernel_size: Size of the filter/kernel.
             strides: The number of pixels a filter moves, like a sliding window.
             batch_norm: Standardizes the inputs to a layer for each mini-batch.
-            action: 'add' or 'append'
             activation: 'leaky' or 'mish'
 
         Returns:
             x or x added to shortcut.
         """
-        if action == 'append':
-            self.shortcuts.append(x)
         padding = 'same'
         if strides != 1:
             x = self.apply_func(ZeroPadding2D, x, padding=((1, 0), (1, 0)))
@@ -174,8 +172,6 @@ class BaseModel:
                 x = self.apply_func(LeakyReLU, x, alpha=0.1)
             if activation == 'mish':
                 x = self.apply_func(Mish, x)
-        if action == 'add':
-            return self.apply_func(Add, [self.shortcuts.pop(), x])
         return x
 
     def output(self, x_input, filters):
@@ -267,17 +263,9 @@ class BaseModel:
                      inference_outputs,
                      ):
         if 'conv' in layer_configuration:
-            if len(layer_configuration) < 6:
-                layer_configuration = (
-                        [int(item) for item in layer_configuration[1: 4]] +
-                        ([bool(layer_configuration[4])]))
-            else:
-                layer_configuration = (
-                        [int(item) for item in layer_configuration[1: 4]] +
-                        ([bool(layer_configuration[4])] + [layer_configuration[5]]))
-            return self.convolution_block(x, *layer_configuration)
+            layer = self.convolution_block(x, *layer_configuration)
         if 'skip' in layer_configuration[0]:
-            skips[layer_configuration[0]] = x
+            layer = x
         if 'maxpool' in layer_configuration:
             size, strides, = [int(item) for item in layer_configuration[1:]]
             return self.apply_func(
@@ -449,4 +437,3 @@ if __name__ == '__main__':
     mod = BaseModel((416, 416, 3), 80)
     tr, inf = mod.create_models()
     mod.load_weights('../../../yolov3.weights')
-    tr.summary()
