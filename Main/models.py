@@ -8,6 +8,7 @@ from tensorflow.keras.layers import (
     UpSampling2D,
     Concatenate,
     Lambda,
+    MaxPooling2D
 )
 import sys
 sys.path.append('..')
@@ -81,7 +82,8 @@ class BaseModel:
             Concatenate,
             Lambda,
             Model,
-            Mish
+            Mish,
+            MaxPooling2D
         )
         self.func_names = [
             'zero_padding',
@@ -94,7 +96,8 @@ class BaseModel:
             'concat',
             'lambda',
             'model',
-            'mish'
+            'mish',
+            'maxpool2d'
         ]
         self.layer_names = {
             func.__name__: f'layer_CURRENT_LAYER_{name}'
@@ -133,7 +136,7 @@ class BaseModel:
         return result
 
     def convolution_block(
-        self, x, filters, kernel_size, strides, batch_norm, action=None
+        self, x, filters, kernel_size, strides, batch_norm, action=None, activation='leaky'
     ):
         """
         Convolution block for yolo version3.
@@ -144,6 +147,7 @@ class BaseModel:
             strides: The number of pixels a filter moves, like a sliding window.
             batch_norm: Standardizes the inputs to a layer for each mini-batch.
             action: 'add' or 'append'
+            activation: 'leaky' or 'mish'
 
         Returns:
             x or x added to shortcut.
@@ -166,9 +170,9 @@ class BaseModel:
         )
         if batch_norm:
             x = self.apply_func(BatchNormalization, x)
-            if '3' in self.model_configuration:
+            if activation == 'leaky':
                 x = self.apply_func(LeakyReLU, x, alpha=0.1)
-            if '4' in self.model_configuration:
+            if activation == 'mish':
                 x = self.apply_func(Mish, x)
         if action == 'add':
             return self.apply_func(Add, [self.shortcuts.pop(), x])
@@ -274,6 +278,10 @@ class BaseModel:
             return self.convolution_block(x, *layer_configuration)
         if 'skip' in layer_configuration[0]:
             skips[layer_configuration[0]] = x
+        if 'maxpool' in layer_configuration:
+            size, strides, = [int(item) for item in layer_configuration[1:]]
+            return self.apply_func(
+                MaxPooling2D, size=(size, size), strides=strides, padding='same')
         if 'detection' in layer_configuration[0]:
             detections.append(x)
         if 'output' in layer_configuration[0]:
@@ -282,8 +290,8 @@ class BaseModel:
         if 'upsample' in layer_configuration:
             return self.apply_func(UpSampling2D, x, size=2)
         if 'concat' in layer_configuration:
-            target = layer_configuration[1]
-            return self.apply_func(Concatenate, [x, skips[target]])
+            targets = [skips[target] for target in layer_configuration[1:]]
+            return self.apply_func(Concatenate, [x, *targets])
         if 'training_model' in layer_configuration:
             self.training_model = Model(
                 input_initial,
@@ -325,7 +333,8 @@ class BaseModel:
         x = input_initial
         skips, output_layers, detection_layers, training_outs, inference_outs = (
             {}, [], [], [], [])
-        layers = [item.strip() for item in open(self.model_configuration).readlines()]
+        layers = [item.strip() for item in open(self.model_configuration).readlines()
+                  if item.strip()]
         layers = list(map(lambda l: l.split(',') if ',' in l else [l], layers))
         for layer in layers:
             result = self.create_layer(
